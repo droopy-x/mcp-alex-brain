@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
 
       if (name === "save_memory") {
         const supabaseUrl = "https://mrkjsficurdfanhdvuhi.supabase.co/rest/v1/memories";
-        // ВАЖНО: Вставь сюда свой реальный sb_publishable ключ!
+
         const anonKey = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
 
         const sbRes = await fetch(supabaseUrl, {
