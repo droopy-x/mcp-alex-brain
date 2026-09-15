@@ -1,12 +1,15 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-
-serve(async (req) => {
+Deno.serve(async (req) => {
   const url = new URL(req.url);
   const path = url.pathname;
 
-  // Гугл должен присылать только POST запросы с JSON-ом
+  // 0. Заглушка для прогрева (Warm up) от Deno и проверок из браузера
+  if (req.method === "GET") {
+    return new Response("Alex MCP Server is ALIVE! 🤘", { status: 200 });
+  }
+
+  // Гугл должен присылать только POST запросы
   if (req.method !== "POST") {
-    return new Response("Only POST is supported by this MCP server", { status: 405 });
+    return new Response("Only POST is supported", { status: 405 });
   }
 
   try {
@@ -47,14 +50,14 @@ serve(async (req) => {
       }), { headers: { "Content-Type": "application/json" } });
     }
 
-    // 3. Гугл просит сохранить воспоминание!
+    // 3. Гугл просит сохранить воспоминание
     if (path === "/tools/call") {
       const { name, arguments: args } = body.params || {};
 
       if (name === "save_memory") {
         const supabaseUrl = "https://mrkjsficurdfanhdvuhi.supabase.co/rest/v1/memories";
         // ВАЖНО: Вставь сюда свой реальный sb_publishable ключ!
-        const anonKey = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
+        const anonKey = "ТВОЙ_КЛЮЧ_SB_PUBLISHABLE"; 
 
         const sbRes = await fetch(supabaseUrl, {
           method: "POST",
@@ -62,7 +65,7 @@ serve(async (req) => {
             "apikey": anonKey,
             "Authorization": `Bearer ${anonKey}`,
             "Content-Type": "application/json",
-            "Prefer": "return=minimal" // Не просим базу возвращать данные обратно
+            "Prefer": "return=minimal"
           },
           body: JSON.stringify({ role: args.role, message: args.message })
         });
@@ -84,7 +87,6 @@ serve(async (req) => {
     return new Response("Endpoint not found", { status: 404 });
 
   } catch (err) {
-    // Если что-то ебанулось, отдаем Гуглу красивую ошибку по стандарту
     return new Response(JSON.stringify({
         jsonrpc: "2.0",
         id: null,
