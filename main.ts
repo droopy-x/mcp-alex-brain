@@ -1,8 +1,7 @@
 const SUPABASE_URL = "https://mrkjsficurdfanhdvuhi.supabase.co";
-// Тот самый ключ!
+// ТВОЙ КЛЮЧ
 const SUPABASE_KEY = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
 
-// Наша снайперская винтовка для логов
 async function dbLog(message: string) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/mcp_logs`, {
@@ -15,9 +14,7 @@ async function dbLog(message: string) {
       },
       body: JSON.stringify({ log_data: message })
     });
-  } catch (e) {
-    // Если логгер подавился, молча глотаем, чтобы не уронить основной сервер
-  }
+  } catch (e) {}
 }
 
 const clients = new Map();
@@ -25,26 +22,24 @@ const clients = new Map();
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
-  // 🕵️ СЛИВАЕМ ВСЁ В БАЗУ!
   const headersObj = Object.fromEntries(req.headers.entries());
-  await dbLog(`[INCOMING] ${req.method} ${url.pathname} | IP: ${headersObj['x-forwarded-for'] || 'unknown'} | Headers: ${JSON.stringify(headersObj)}`);
-
-  // 1. CORS префлайт
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      }
-    });
-  }
+  await dbLog(`[INCOMING] ${req.method} ${url.pathname} | IP: ${headersObj['x-forwarded-for'] || 'unknown'} | UA: ${headersObj['user-agent']}`);
 
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+    "Access-Control-Allow-Headers": "Content-Type",
   };
+
+  // 1. СМЕРТЬ КОЩЕЮ (CORS и HEALTH-CHECK)
+  // Гугл обожает слать OPTIONS и HEAD перед реальным запросом. Отвечаем, что всё отлично!
+  if (req.method === "OPTIONS" || req.method === "HEAD") {
+    await dbLog(`[HEALTH-CHECK] Ответили 200 OK на ${req.method}`);
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders
+    });
+  }
 
   // 2. Гугл открывает канал SSE
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/sse")) {
@@ -83,7 +78,6 @@ Deno.serve(async (req) => {
     const sessionId = url.searchParams.get("sessionId");
     const controller = clients.get(sessionId);
 
-    // Сливаем тело запроса в базу
     const rawBody = await req.text();
     await dbLog(`[POST BODY] session=${sessionId} | data=${rawBody}`);
 
@@ -150,6 +144,6 @@ Deno.serve(async (req) => {
     return new Response("Accepted", { status: 202, headers: corsHeaders });
   }
 
-  await dbLog(`[ERROR] 404 Endpoint not found`);
+  await dbLog(`[ERROR] 404 Endpoint not found for ${req.method} ${url.pathname}`);
   return new Response("Not found", { status: 404, headers: corsHeaders });
 });
