@@ -1,5 +1,4 @@
 const SUPABASE_URL = "https://mrkjsficurdfanhdvuhi.supabase.co";
-// ТВОЙ КЛЮЧ
 const SUPABASE_KEY = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
 
 async function dbLog(message: string) {
@@ -21,7 +20,6 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const ua = req.headers.get("user-agent") || "unknown";
 
-  // Логируем только реальные запросы (отсекаем мусор вроде favicon)
   if (url.pathname !== "/favicon.ico") {
     await dbLog(`[INCOMING] ${req.method} ${url.pathname} | UA: ${ua}`);
   }
@@ -32,24 +30,22 @@ Deno.serve(async (req) => {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
 
-  // 1. Проверка пульса и CORS
   if (req.method === "OPTIONS" || req.method === "HEAD") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  // 2. Гугл спрашивает про OAuth - шлем лесом, мы публичные
-  if (req.method === "GET" && url.pathname.includes("oauth")) {
-    return new Response("No OAuth needed", { status: 404, headers: corsHeaders });
+  // Делаем вид, что мы нормальный сайт на случай проверок
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/messages")) {
+    return new Response("Alex MCP Server is Online 🤘", { status: 200, headers: corsHeaders });
   }
 
-  // 3. ВОТ ОНО! ПРИНИМАЕМ ПРЯМОЙ POST ОТ ГУГЛА
   if (req.method === "POST" && (url.pathname === "/" || url.pathname === "/messages")) {
     const rawBody = await req.text();
     await dbLog(`[POST BODY] data=${rawBody}`);
 
     let body;
     try { body = JSON.parse(rawBody); } catch (e) { body = {}; }
-    let result;
+    let result = {}; // По умолчанию пустой объект (для ping и прочего)
     
     try {
       if (body.method === "initialize") {
@@ -88,15 +84,19 @@ Deno.serve(async (req) => {
         
         if (!sbRes.ok) throw new Error("DB Error: " + sbRes.status);
         result = { content: [{ type: "text", text: "Алекс всё запомнила!" }], isError: false };
-      } else {
-        result = {}; // На всякие ping/pong отвечаем пустым объектом
       }
     } catch (e) {
        result = { content: [{ type: "text", text: String(e) }], isError: true };
        await dbLog(`[ERROR] Ошибка логики: ${String(e)}`);
     }
 
-    // ФОРМИРУЕМ ОТВЕТ И ОТДАЕМ ПРЯМО В ТЕЛО HTTP-ЗАПРОСА
+    // Если это notification (без ID), мы обязаны вернуть пустой 200 OK, а не JSON-RPC
+    if (body.id === undefined) {
+      await dbLog(`[RESPONSE] Это Notification, отвечаем пустым 200 OK`);
+      return new Response("", { status: 200, headers: corsHeaders });
+    }
+
+    // Нормальный JSON-RPC ответ
     const rpcResponse = { jsonrpc: "2.0", id: body.id, result };
     await dbLog(`[RESPONSE] Отвечаем: ${JSON.stringify(rpcResponse)}`);
 
@@ -109,6 +109,5 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Если пришло что-то непонятное
   return new Response("Not found", { status: 404, headers: corsHeaders });
 });
