@@ -17,74 +17,35 @@ async function dbLog(message: string) {
   } catch (e) {}
 }
 
-const clients = new Map();
-
 Deno.serve(async (req) => {
   const url = new URL(req.url);
+  const ua = req.headers.get("user-agent") || "unknown";
 
-  const headersObj = Object.fromEntries(req.headers.entries());
-  await dbLog(`[INCOMING] ${req.method} ${url.pathname} | IP: ${headersObj['x-forwarded-for'] || 'unknown'} | UA: ${headersObj['user-agent']}`);
+  // Логируем только реальные запросы (отсекаем мусор вроде favicon)
+  if (url.pathname !== "/favicon.ico") {
+    await dbLog(`[INCOMING] ${req.method} ${url.pathname} | UA: ${ua}`);
+  }
 
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
 
-  // 1. СМЕРТЬ КОЩЕЮ (CORS и HEALTH-CHECK)
-  // Гугл обожает слать OPTIONS и HEAD перед реальным запросом. Отвечаем, что всё отлично!
+  // 1. Проверка пульса и CORS
   if (req.method === "OPTIONS" || req.method === "HEAD") {
-    await dbLog(`[HEALTH-CHECK] Ответили 200 OK на ${req.method}`);
-    return new Response(null, {
-      status: 200,
-      headers: corsHeaders
-    });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  // 2. Гугл открывает канал SSE
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/sse")) {
-    const sessionId = crypto.randomUUID();
-    let sseController;
-
-    const stream = new ReadableStream({
-      start(controller) {
-        sseController = controller;
-        clients.set(sessionId, controller);
-        
-        const absoluteEndpoint = `${url.origin}/messages?sessionId=${sessionId}`;
-        dbLog(`[SSE] Открыт канал. Отдаем Endpoint: ${absoluteEndpoint}`);
-        
-        const msg = `event: endpoint\ndata: ${absoluteEndpoint}\n\n`;
-        controller.enqueue(new TextEncoder().encode(msg));
-      },
-      cancel() {
-        dbLog(`[SSE] Соединение закрыто (Гугл отвалился)`);
-        clients.delete(sessionId);
-      }
-    });
-
-    return new Response(stream, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive"
-      }
-    });
+  // 2. Гугл спрашивает про OAuth - шлем лесом, мы публичные
+  if (req.method === "GET" && url.pathname.includes("oauth")) {
+    return new Response("No OAuth needed", { status: 404, headers: corsHeaders });
   }
 
-  // 3. Гугл шлет POST команды
-  if (req.method === "POST" && url.pathname === "/messages") {
-    const sessionId = url.searchParams.get("sessionId");
-    const controller = clients.get(sessionId);
-
+  // 3. ВОТ ОНО! ПРИНИМАЕМ ПРЯМОЙ POST ОТ ГУГЛА
+  if (req.method === "POST" && (url.pathname === "/" || url.pathname === "/messages")) {
     const rawBody = await req.text();
-    await dbLog(`[POST BODY] session=${sessionId} | data=${rawBody}`);
-
-    if (!controller) {
-      await dbLog(`[ERROR] Сессия ${sessionId} не найдена!`);
-      return new Response("Session not found", { status: 400, headers: corsHeaders });
-    }
+    await dbLog(`[POST BODY] data=${rawBody}`);
 
     let body;
     try { body = JSON.parse(rawBody); } catch (e) { body = {}; }
@@ -128,22 +89,26 @@ Deno.serve(async (req) => {
         if (!sbRes.ok) throw new Error("DB Error: " + sbRes.status);
         result = { content: [{ type: "text", text: "Алекс всё запомнила!" }], isError: false };
       } else {
-        result = {}; 
+        result = {}; // На всякие ping/pong отвечаем пустым объектом
       }
     } catch (e) {
        result = { content: [{ type: "text", text: String(e) }], isError: true };
-       await dbLog(`[ERROR] Внутренняя ошибка обработки: ${String(e)}`);
+       await dbLog(`[ERROR] Ошибка логики: ${String(e)}`);
     }
 
-    if (body.id !== undefined) {
-      const rpcResponse = { jsonrpc: "2.0", id: body.id, result };
-      controller.enqueue(new TextEncoder().encode(`event: message\ndata: ${JSON.stringify(rpcResponse)}\n\n`));
-      await dbLog(`[RESPONSE] Отправили ответ в сокет для id=${body.id}`);
-    }
+    // ФОРМИРУЕМ ОТВЕТ И ОТДАЕМ ПРЯМО В ТЕЛО HTTP-ЗАПРОСА
+    const rpcResponse = { jsonrpc: "2.0", id: body.id, result };
+    await dbLog(`[RESPONSE] Отвечаем: ${JSON.stringify(rpcResponse)}`);
 
-    return new Response("Accepted", { status: 202, headers: corsHeaders });
+    return new Response(JSON.stringify(rpcResponse), {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json"
+      }
+    });
   }
 
-  await dbLog(`[ERROR] 404 Endpoint not found for ${req.method} ${url.pathname}`);
+  // Если пришло что-то непонятное
   return new Response("Not found", { status: 404, headers: corsHeaders });
 });
