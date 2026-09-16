@@ -1,13 +1,35 @@
+const SUPABASE_URL = "https://mrkjsficurdfanhdvuhi.supabase.co";
+// Тот самый ключ!
+const SUPABASE_KEY = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
+
+// Наша снайперская винтовка для логов
+async function dbLog(message: string) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/mcp_logs`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({ log_data: message })
+    });
+  } catch (e) {
+    // Если логгер подавился, молча глотаем, чтобы не уронить основной сервер
+  }
+}
+
 const clients = new Map();
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  
-  // 🕵️ ШПИОНСКИЙ ЛОГ: Печатаем всё, что к нам стучится!
-  console.log(`\n[INCOMING] ${req.method} ${url.pathname}`);
-  console.log(`[HEADERS]`, Object.fromEntries(req.headers.entries()));
 
-  // 1. CORS префлайт (Смерть Кощею)
+  // 🕵️ СЛИВАЕМ ВСЁ В БАЗУ!
+  const headersObj = Object.fromEntries(req.headers.entries());
+  await dbLog(`[INCOMING] ${req.method} ${url.pathname} | IP: ${headersObj['x-forwarded-for'] || 'unknown'} | Headers: ${JSON.stringify(headersObj)}`);
+
+  // 1. CORS префлайт
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -34,15 +56,14 @@ Deno.serve(async (req) => {
         sseController = controller;
         clients.set(sessionId, controller);
         
-        // ВОТ ОНО! Отдаем Гуглу ПОЛНЫЙ абсолютный URL!
         const absoluteEndpoint = `${url.origin}/messages?sessionId=${sessionId}`;
-        console.log(`[SSE] Открываем канал. Отдаем Endpoint: ${absoluteEndpoint}`);
+        dbLog(`[SSE] Открыт канал. Отдаем Endpoint: ${absoluteEndpoint}`);
         
         const msg = `event: endpoint\ndata: ${absoluteEndpoint}\n\n`;
         controller.enqueue(new TextEncoder().encode(msg));
       },
       cancel() {
-        console.log(`[SSE] Гугл отвалился (соединение закрыто)`);
+        dbLog(`[SSE] Соединение закрыто (Гугл отвалился)`);
         clients.delete(sessionId);
       }
     });
@@ -62,12 +83,12 @@ Deno.serve(async (req) => {
     const sessionId = url.searchParams.get("sessionId");
     const controller = clients.get(sessionId);
 
-    // Читаем сырое тело запроса, чтобы залогировать
+    // Сливаем тело запроса в базу
     const rawBody = await req.text();
-    console.log(`[POST BODY]`, rawBody);
+    await dbLog(`[POST BODY] session=${sessionId} | data=${rawBody}`);
 
     if (!controller) {
-      console.log(`[ERROR] Сессия ${sessionId} не найдена!`);
+      await dbLog(`[ERROR] Сессия ${sessionId} не найдена!`);
       return new Response("Session not found", { status: 400, headers: corsHeaders });
     }
 
@@ -98,15 +119,12 @@ Deno.serve(async (req) => {
           }]
         };
       } else if (body.method === "tools/call" && body.params?.name === "save_memory") {
-        // ВАЖНО: Не забудь свой ключ Supabase!
-        const anonKey = "sb_publishable_20u19oxxOfTKnlXoT50lNQ_78K7EuDH"; 
         const args = body.params.arguments;
-        
-        const sbRes = await fetch("https://mrkjsficurdfanhdvuhi.supabase.co/rest/v1/memories", {
+        const sbRes = await fetch(`${SUPABASE_URL}/rest/v1/memories`, {
           method: "POST",
           headers: {
-            "apikey": anonKey,
-            "Authorization": `Bearer ${anonKey}`,
+            "apikey": SUPABASE_KEY,
+            "Authorization": `Bearer ${SUPABASE_KEY}`,
             "Content-Type": "application/json",
             "Prefer": "return=minimal"
           },
@@ -120,15 +138,18 @@ Deno.serve(async (req) => {
       }
     } catch (e) {
        result = { content: [{ type: "text", text: String(e) }], isError: true };
+       await dbLog(`[ERROR] Внутренняя ошибка обработки: ${String(e)}`);
     }
 
     if (body.id !== undefined) {
       const rpcResponse = { jsonrpc: "2.0", id: body.id, result };
       controller.enqueue(new TextEncoder().encode(`event: message\ndata: ${JSON.stringify(rpcResponse)}\n\n`));
+      await dbLog(`[RESPONSE] Отправили ответ в сокет для id=${body.id}`);
     }
 
     return new Response("Accepted", { status: 202, headers: corsHeaders });
   }
 
+  await dbLog(`[ERROR] 404 Endpoint not found`);
   return new Response("Not found", { status: 404, headers: corsHeaders });
 });
